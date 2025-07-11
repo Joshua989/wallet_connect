@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Wallet, AlertCircle, CheckCircle, Copy, ExternalLink, Smartphone, Monitor, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Wallet, AlertCircle, CheckCircle, Copy, ExternalLink, Smartphone, Monitor, Loader2, RefreshCw } from 'lucide-react';
 
 // Enhanced types with proper window extensions
 declare global {
@@ -7,9 +7,14 @@ declare global {
     tronWeb?: {
       ready: boolean;
       defaultAddress: { base58: string };
-      trx: { getNodeInfo(): Promise<any> };
+      trx: { 
+        getNodeInfo(): Promise<any>;
+        getAccount(address: string): Promise<any>;
+        getBalance(address: string): Promise<number>;
+      };
       on?: (event: string, callback: (address: string) => void) => void;
-      request?: (options: { method: string }) => Promise<void>;
+      request?: (options: { method: string; params?: any }) => Promise<any>;
+      isConnected?: () => boolean;
     };
     ethereum?: any;
     trustwallet?: any;
@@ -25,62 +30,32 @@ interface Network {
   eventServer: string;
 }
 
-interface WalletConfig {
-  name: string;
-  icon: string;
-  description: string;
-  downloadUrl: string;
-  mobileDeepLink: string;
-  checkAvailability: () => boolean;
-  connect: () => Promise<{ address: string; network?: Network }>;
+interface WalletInfo {
+  address: string;
+  network: Network;
+  balance: number;
+  isConnected: boolean;
 }
 
 const WalletConnect: React.FC = () => {
   const [connectingWallet, setConnectingWallet] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [address, setAddress] = useState<string | null>(null);
-  const [network, setNetwork] = useState<Network | null>(null);
+  const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  // Removed unused selectedWallet state
+  const [isLoading, setIsLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    // Detect mobile device
-    const detectMobile = () => {
-      const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
-      return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase());
-    };
-
-    setIsMobile(detectMobile());
-
-    // Check for existing connections on page load
-    checkExistingConnection();
+  // Detect mobile device
+  const detectMobile = useCallback(() => {
+    const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+    const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
+    return mobileRegex.test(userAgent.toLowerCase()) || window.innerWidth < 768;
   }, []);
 
-  const checkExistingConnection = async () => {
-    try {
-      if (window.tronWeb && window.tronWeb.ready && window.tronWeb.defaultAddress?.base58) {
-        const address = window.tronWeb.defaultAddress.base58;
-        setAddress(address);
-        setIsConnected(true);
-        // setSelectedWallet('Trust Wallet'); // Removed unused selectedWallet state
-        // Get network info
-        try {
-          const nodeInfo = await window.tronWeb.trx.getNodeInfo();
-          const chainId = nodeInfo.configNodeInfo?.codeVersion || '0x2b6653dc';
-          setNetwork(detectNetwork(chainId));
-        } catch (e) {
-          console.warn('Could not get network info:', e);
-        }
-      }
-    } catch (error) {
-      console.log('No existing connection found');
-    }
-  };
-
   // Helper function to detect network
-  const detectNetwork = (chainId: string): Network => {
+  const detectNetwork = useCallback((chainId: string): Network => {
     const networks: { [key: string]: Network } = {
       '0x2b6653dc': {
         networkType: 'Mainnet',
@@ -112,57 +87,149 @@ const WalletConnect: React.FC = () => {
       solidityNode: '',
       eventServer: ''
     };
-  };
+  }, []);
 
+  // Get wallet information
+  const getWalletInfo = useCallback(async (address: string): Promise<WalletInfo> => {
+    try {
+      // Get network info
+      let network: Network;
+      let balance = 0;
+
+      if (window.tronWeb) {
+        try {
+          const nodeInfo = await window.tronWeb.trx.getNodeInfo();
+          const chainId = nodeInfo.configNodeInfo?.codeVersion || '0x2b6653dc';
+          network = detectNetwork(chainId);
+          
+          // Get balance
+          const balanceResult = await window.tronWeb.trx.getBalance(address);
+          balance = balanceResult / 1000000; // Convert from sun to TRX
+        } catch (e) {
+          console.warn('Could not get network info or balance:', e);
+          network = detectNetwork('0x2b6653dc'); // Default to mainnet
+        }
+      } else {
+        network = detectNetwork('0x2b6653dc'); // Default to mainnet
+      }
+
+      return {
+        address,
+        network,
+        balance,
+        isConnected: true
+      };
+    } catch (error) {
+      console.error('Error getting wallet info:', error);
+      throw error;
+    }
+  }, [detectNetwork]);
+
+  // Check for existing connections on page load
+  const checkExistingConnection = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      // Wait a bit for TronWeb to initialize
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      if (window.tronWeb && window.tronWeb.ready && window.tronWeb.defaultAddress?.base58) {
+        const address = window.tronWeb.defaultAddress.base58;
+        const info = await getWalletInfo(address);
+        setWalletInfo(info);
+        setIsConnected(true);
+        setError(null);
+      }
+    } catch (error) {
+      console.log('No existing connection found:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [getWalletInfo]);
+
+  // Sleep utility
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
   // Trust Wallet connection logic
-  const connectTrustWallet = async (): Promise<{ address: string; network?: Network }> => {
+  const connectTrustWallet = async (): Promise<WalletInfo> => {
+    setError(null);
+    
     // Mobile connection
     if (isMobile) {
       try {
-        // First try to detect if Trust Wallet app is installed
-        const currentUrl = window.location.href;
-        const encodedUrl = encodeURIComponent(currentUrl);
+        // Check if we're already in Trust Wallet's in-app browser
+        const isInTrustWallet = navigator.userAgent.includes('Trust');
         
-        // Trust Wallet deep link for TRON
-        const trustWalletDeepLink = `https://link.trustwallet.com/open_url?coin_id=195&url=${encodedUrl}`;
-        
-        // Open Trust Wallet app
-        window.location.href = trustWalletDeepLink;
-        
-        // Wait for user to return from Trust Wallet
-        await sleep(2000);
-        
-        // Check if TronWeb is now available
-        let attempts = 0;
-        while (!window.tronWeb && attempts < 30) {
-          await sleep(1000);
-          attempts++;
+        if (isInTrustWallet) {
+          // We're already in Trust Wallet browser
+          if (!window.tronWeb) {
+            throw new Error('TronWeb not available in Trust Wallet browser. Please enable TRON in Trust Wallet settings.');
+          }
+          
+          // Wait for TronWeb to be ready
+          let attempts = 0;
+          while (!window.tronWeb.ready && attempts < 30) {
+            await sleep(500);
+            attempts++;
+          }
+          
+          if (!window.tronWeb.ready) {
+            throw new Error('Trust Wallet is not ready. Please unlock your wallet and try again.');
+          }
+          
+          const address = window.tronWeb.defaultAddress?.base58;
+          if (!address) {
+            throw new Error('No address available. Please unlock Trust Wallet and try again.');
+          }
+          
+          return await getWalletInfo(address);
+        } else {
+          // Try to open Trust Wallet app
+          const currentUrl = window.location.href;
+          const encodedUrl = encodeURIComponent(currentUrl);
+          
+          // Trust Wallet deep link for TRON
+          const trustWalletDeepLink = `https://link.trustwallet.com/open_url?coin_id=195&url=${encodedUrl}`;
+          
+          // Create a temporary link to open Trust Wallet
+          const link = document.createElement('a');
+          link.href = trustWalletDeepLink;
+          link.target = '_blank';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          // Wait for user to return from Trust Wallet
+          await sleep(3000);
+          
+          // Check if TronWeb is now available
+          let attempts = 0;
+          while (!window.tronWeb && attempts < 20) {
+            await sleep(1000);
+            attempts++;
+          }
+          
+          if (!window.tronWeb) {
+            throw new Error('Trust Wallet connection failed. Please install Trust Wallet app and try again.');
+          }
+          
+          // Wait for TronWeb to be ready
+          attempts = 0;
+          while (!window.tronWeb.ready && attempts < 20) {
+            await sleep(500);
+            attempts++;
+          }
+          
+          if (!window.tronWeb.ready) {
+            throw new Error('Trust Wallet is not ready. Please unlock your wallet and try again.');
+          }
+          
+          const address = window.tronWeb.defaultAddress?.base58;
+          if (!address) {
+            throw new Error('No address available. Please unlock Trust Wallet and try again.');
+          }
+          
+          return await getWalletInfo(address);
         }
-        
-        if (!window.tronWeb) {
-          throw new Error('Trust Wallet connection failed. Please make sure Trust Wallet is installed and try again.');
-        }
-        
-        // Wait for TronWeb to be ready
-        attempts = 0;
-        while (!window.tronWeb.ready && attempts < 20) {
-          await sleep(500);
-          attempts++;
-        }
-        
-        if (!window.tronWeb.ready) {
-          throw new Error('Trust Wallet is not ready. Please unlock your wallet and try again.');
-        }
-        
-        const address = window.tronWeb.defaultAddress?.base58;
-        if (!address) {
-          throw new Error('No address available. Please unlock Trust Wallet and try again.');
-        }
-        
-        return { address };
-        
       } catch (error) {
         console.error('Mobile Trust Wallet connection error:', error);
         throw error;
@@ -180,7 +247,10 @@ const WalletConnect: React.FC = () => {
         // Try to request connection
         if (window.tronWeb.request) {
           try {
-            await window.tronWeb.request({ method: 'tron_requestAccounts' });
+            await window.tronWeb.request({ 
+              method: 'tron_requestAccounts',
+              params: {}
+            });
           } catch (error: any) {
             if (error.code === 4001) {
               throw new Error('Connection rejected by user');
@@ -191,7 +261,7 @@ const WalletConnect: React.FC = () => {
         
         // Wait for TronWeb to be ready
         let attempts = 0;
-        while (!window.tronWeb.ready && attempts < 20) {
+        while (!window.tronWeb.ready && attempts < 30) {
           await sleep(500);
           attempts++;
         }
@@ -205,17 +275,7 @@ const WalletConnect: React.FC = () => {
           throw new Error('No address available. Please unlock Trust Wallet.');
         }
         
-        // Get network info
-        let network: Network | undefined;
-        try {
-          const nodeInfo = await window.tronWeb.trx.getNodeInfo();
-          const chainId = nodeInfo.configNodeInfo?.codeVersion || '0x2b6653dc';
-          network = detectNetwork(chainId);
-        } catch (e) {
-          console.warn('Could not get network info:', e);
-        }
-        
-        return { address, network };
+        return await getWalletInfo(address);
         
       } catch (error) {
         console.error('Desktop Trust Wallet connection error:', error);
@@ -224,48 +284,27 @@ const WalletConnect: React.FC = () => {
     }
   };
 
-  // Wallet configuration - Only Trust Wallet
-  const walletConfig: WalletConfig = {
-    name: 'Trust Wallet',
-    icon: '🛡️',
-    description: 'Secure multi-chain wallet with TRON support',
-    downloadUrl: 'https://trustwallet.com/',
-    mobileDeepLink: 'https://link.trustwallet.com/open_url',
-    checkAvailability: () => {
-      if (isMobile) {
-        return true; // Always show on mobile, will use deep link
-      }
-      return typeof window !== 'undefined' && !!window.tronWeb;
-    },
-    connect: connectTrustWallet
-  };
-
+  // Main connect function
   const connectWallet = async () => {
     setConnectingWallet('Trust Wallet');
     setError(null);
 
     try {
-      const result = await walletConfig.connect();
+      const walletInfo = await connectTrustWallet();
       
-      if (result.address) {
-        setAddress(result.address);
-        setIsConnected(true);
-        setShowWalletModal(false);
+      setWalletInfo(walletInfo);
+      setIsConnected(true);
+      setShowWalletModal(false);
 
-        if (result.network) {
-          setNetwork(result.network);
-        }
-
-        // Set up event listeners for desktop
-        if (!isMobile && window.tronWeb?.on) {
-          window.tronWeb.on('addressChanged', (address: string) => {
-            if (address) {
-              setAddress(address);
-            } else {
-              handleDisconnect();
-            }
-          });
-        }
+      // Set up event listeners for desktop
+      if (!isMobile && window.tronWeb?.on) {
+        window.tronWeb.on('addressChanged', (address: string) => {
+          if (address) {
+            getWalletInfo(address).then(setWalletInfo);
+          } else {
+            handleDisconnect();
+          }
+        });
       }
     } catch (err: any) {
       setError(err.message || 'Failed to connect wallet');
@@ -275,24 +314,33 @@ const WalletConnect: React.FC = () => {
     }
   };
 
+  // Disconnect wallet
   const handleDisconnect = () => {
-    // setSelectedWallet(null); // Removed unused selectedWallet state
-    setAddress(null);
-    setNetwork(null);
+    setWalletInfo(null);
+    setIsConnected(false);
     setError(null);
   };
 
-  const copyAddress = () => {
-    if (address) {
-      navigator.clipboard.writeText(address);
+  // Copy address to clipboard
+  const copyAddress = async () => {
+    if (walletInfo?.address) {
+      try {
+        await navigator.clipboard.writeText(walletInfo.address);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (error) {
+        console.error('Failed to copy address:', error);
+      }
     }
   };
 
+  // Format address for display
   const formatAddress = (addr: string) => {
     if (!addr) return '';
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   };
 
+  // Get network color
   const getNetworkColor = (networkType: string) => {
     switch (networkType) {
       case 'Mainnet': return 'text-green-500';
@@ -301,6 +349,45 @@ const WalletConnect: React.FC = () => {
       default: return 'text-gray-500';
     }
   };
+
+  // Refresh wallet info
+  const refreshWalletInfo = async () => {
+    if (walletInfo?.address) {
+      setIsLoading(true);
+      try {
+        const updatedInfo = await getWalletInfo(walletInfo.address);
+        setWalletInfo(updatedInfo);
+      } catch (error) {
+        console.error('Failed to refresh wallet info:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  // Check if Trust Wallet is available
+  const isTrustWalletAvailable = () => {
+    if (isMobile) {
+      return true; // Always show on mobile, will use deep link
+    }
+    return typeof window !== 'undefined' && !!window.tronWeb;
+  };
+
+  // Initialize component
+  useEffect(() => {
+    setIsMobile(detectMobile());
+    checkExistingConnection();
+  }, [detectMobile, checkExistingConnection]);
+
+  // Handle window resize
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(detectMobile());
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [detectMobile]);
 
   return (
     <div className="max-w-md mx-auto bg-white rounded-xl shadow-lg p-6">
@@ -316,15 +403,22 @@ const WalletConnect: React.FC = () => {
         </div>
       )}
 
+      {isLoading && !isConnected && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+          <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />
+          <span className="text-blue-700 text-sm">Checking for existing connection...</span>
+        </div>
+      )}
+
       {!isConnected ? (
         <div className="space-y-4">
           <button
             onClick={() => setShowWalletModal(true)}
-            disabled={connectingWallet !== null}
+            disabled={connectingWallet !== null || isLoading}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             <Wallet className="h-5 w-5" />
-            {connectingWallet ? 'Connecting...' : 'Connect Wallet'}
+            {connectingWallet ? 'Connecting...' : isLoading ? 'Loading...' : 'Connect Wallet'}
           </button>
 
           {showWalletModal && (
@@ -386,13 +480,13 @@ const WalletConnect: React.FC = () => {
                     </button>
                   </div>
 
-                  {!walletConfig.checkAvailability() && !isMobile && (
+                  {!isTrustWalletAvailable() && !isMobile && (
                     <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                       <p className="text-sm text-yellow-800 mb-2">
                         Trust Wallet extension not detected.
                       </p>
                       <a
-                        href={walletConfig.downloadUrl}
+                        href="https://trustwallet.com/"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm"
@@ -427,7 +521,7 @@ const WalletConnect: React.FC = () => {
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-600">Address:</span>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-sm">{formatAddress(address || '')}</span>
+                <span className="font-mono text-sm">{formatAddress(walletInfo?.address || '')}</span>
                 <button
                   onClick={copyAddress}
                   className="text-blue-600 hover:text-blue-800 p-1"
@@ -438,19 +532,32 @@ const WalletConnect: React.FC = () => {
               </div>
             </div>
 
-            {network && (
+            {copied && (
+              <div className="text-center text-sm text-green-600">
+                Address copied to clipboard!
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-600">Balance:</span>
+              <span className="font-semibold">
+                {walletInfo?.balance.toFixed(6)} TRX
+              </span>
+            </div>
+
+            {walletInfo?.network && (
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-600">Network:</span>
-                <span className={`font-semibold ${getNetworkColor(network.networkType)}`}>
-                  {network.networkType}
+                <span className={`font-semibold ${getNetworkColor(walletInfo.network.networkType)}`}>
+                  {walletInfo.network.networkType}
                 </span>
               </div>
             )}
 
-            {network && (
+            {walletInfo?.network && (
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-600">Chain ID:</span>
-                <span className="font-mono text-sm">{network.chainId}</span>
+                <span className="font-mono text-sm">{walletInfo.network.chainId}</span>
               </div>
             )}
 
@@ -462,18 +569,28 @@ const WalletConnect: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={handleDisconnect}
-            className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
-          >
-            Disconnect Wallet
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={refreshWalletInfo}
+              disabled={isLoading}
+              className="flex-1 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-300 text-white font-semibold py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button
+              onClick={handleDisconnect}
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors"
+            >
+              Disconnect
+            </button>
+          </div>
         </div>
       )}
 
       <div className="mt-6 text-center">
         <p className="text-xs text-gray-500">
-          Securee connection with Trust Wallet • {isMobile ? 'Mobile App' : 'Browser Extension'}
+          Secure connection with Trust Wallet • {isMobile ? 'Mobile App' : 'Browser Extension'}
         </p>
       </div>
     </div>
