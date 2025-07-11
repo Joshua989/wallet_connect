@@ -36,7 +36,6 @@ interface WalletConfig {
 }
 
 const WalletConnect: React.FC = () => {
-  const [selectedWallet, setSelectedWallet] = useState<string | null>(null);
   const [connectingWallet, setConnectingWallet] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState<string | null>(null);
@@ -44,6 +43,7 @@ const WalletConnect: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  // Removed unused selectedWallet state
 
   useEffect(() => {
     // Detect mobile device
@@ -64,8 +64,7 @@ const WalletConnect: React.FC = () => {
         const address = window.tronWeb.defaultAddress.base58;
         setAddress(address);
         setIsConnected(true);
-        setSelectedWallet('Trust Wallet');
-        
+        // setSelectedWallet('Trust Wallet'); // Removed unused selectedWallet state
         // Get network info
         try {
           const nodeInfo = await window.tronWeb.trx.getNodeInfo();
@@ -249,7 +248,6 @@ const WalletConnect: React.FC = () => {
       const result = await walletConfig.connect();
       
       if (result.address) {
-        setSelectedWallet('Trust Wallet');
         setAddress(result.address);
         setIsConnected(true);
         setShowWalletModal(false);
@@ -278,9 +276,8 @@ const WalletConnect: React.FC = () => {
   };
 
   const handleDisconnect = () => {
-    setSelectedWallet(null);
+    // setSelectedWallet(null); // Removed unused selectedWallet state
     setAddress(null);
-    setIsConnected(false);
     setNetwork(null);
     setError(null);
   };
