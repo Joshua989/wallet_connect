@@ -476,7 +476,7 @@ const WalletConnect: React.FC = () => {
 
       <div className="mt-6 text-center">
         <p className="text-xs text-gray-500">
-          Secure connection with Trust Wallet • {isMobile ? 'Mobile App' : 'Browser Extension'}
+          Securee connection with Trust Wallet • {isMobile ? 'Mobile App' : 'Browser Extension'}
         </p>
       </div>
     </div>
