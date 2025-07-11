@@ -363,7 +363,6 @@ const WalletConnect: React.FC = () => {
     }
   };
 
-  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
   return (
     <div className="max-w-md mx-auto bg-white rounded-xl shadow-lg p-6">
