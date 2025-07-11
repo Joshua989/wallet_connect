@@ -1,7 +1,39 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Wallet, AlertCircle, CheckCircle, Copy, ExternalLink, Smartphone, Monitor, Globe } from 'lucide-react';
 
-// Types based on the GitHub documentation
+// Enhanced types with proper window extensions
+declare global {
+  interface Window {
+    tronWeb?: {
+      ready: boolean;
+      defaultAddress: { base58: string };
+      trx: { getNodeInfo(): Promise<any> };
+      on?: (event: string, callback: (address: string) => void) => void;
+      request?: (options: { method: string }) => Promise<void>;
+    };
+    bitkeep?: {
+      tronLink: {
+        request(options: { method: string }): Promise<string[]>;
+      };
+    };
+    okxwallet?: {
+      tronLink: {
+        request(options: { method: string }): Promise<string[]>;
+      };
+    };
+    trustwallet?: {
+      tronWeb: {
+        request(options: { method: string }): Promise<string[]>;
+      };
+    };
+    tokenpocket?: {
+      tronWeb: {
+        request(options: { method: string }): Promise<string[]>;
+      };
+    };
+  }
+}
+
 interface Network {
   networkType: 'Mainnet' | 'Shasta' | 'Nile' | 'Unknown';
   chainId: string;
@@ -66,7 +98,7 @@ const WalletConnect: React.FC = () => {
     };
   };
 
-  // Wallet configurations with direct API calls
+  // Wallet configurations with proper type checking
   const walletConfigs: WalletConfig[] = [
     {
       name: 'TronLink',
@@ -77,20 +109,19 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
-        return typeof window !== 'undefined' && !!(window as any).tronWeb;
+        return typeof window !== 'undefined' && !!window.tronWeb;
       },
       connect: async () => {
-        const tronWeb = (window as any).tronWeb;
-        if (!tronWeb) {
+        if (!window.tronWeb) {
           throw new Error('TronLink is not installed');
         }
 
         // Check if TronLink is ready
-        if (!tronWeb.ready) {
+        if (!window.tronWeb.ready) {
           // Try to trigger TronLink
-          if (tronWeb.request) {
+          if (window.tronWeb.request) {
             try {
-              await tronWeb.request({ method: 'tron_requestAccounts' });
+              await window.tronWeb.request({ method: 'tron_requestAccounts' });
             } catch (error) {
               throw new Error('User rejected connection');
             }
@@ -101,16 +132,16 @@ const WalletConnect: React.FC = () => {
 
         // Wait for TronLink to be ready
         let attempts = 0;
-        while (!tronWeb.ready && attempts < 10) {
+        while (!window.tronWeb.ready && attempts < 10) {
           await new Promise(resolve => setTimeout(resolve, 500));
           attempts++;
         }
 
-        if (!tronWeb.ready) {
+        if (!window.tronWeb.ready) {
           throw new Error('TronLink is not ready. Please unlock your wallet.');
         }
 
-        const address = tronWeb.defaultAddress?.base58;
+        const address = window.tronWeb.defaultAddress?.base58;
         if (!address) {
           throw new Error('No address available. Please unlock TronLink.');
         }
@@ -118,7 +149,7 @@ const WalletConnect: React.FC = () => {
         // Get network info
         let network: Network | undefined;
         try {
-          const nodeInfo = await tronWeb.trx.getNodeInfo();
+          const nodeInfo = await window.tronWeb.trx.getNodeInfo();
           const chainId = nodeInfo.configNodeInfo?.codeVersion || '0x2b6653dc';
           network = detectNetwork(chainId);
         } catch (e) {
@@ -137,16 +168,15 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
-        return typeof window !== 'undefined' && !!(window as any).bitkeep?.tronLink;
+        return typeof window !== 'undefined' && !!window.bitkeep?.tronLink;
       },
       connect: async () => {
-        const bitkeep = (window as any).bitkeep;
-        if (!bitkeep?.tronLink) {
+        if (!window.bitkeep?.tronLink) {
           throw new Error('Bitget Wallet is not installed');
         }
 
         try {
-          const accounts = await bitkeep.tronLink.request({ method: 'tron_requestAccounts' });
+          const accounts = await window.bitkeep.tronLink.request({ method: 'tron_requestAccounts' });
           if (!accounts || accounts.length === 0) {
             throw new Error('No accounts available');
           }
@@ -170,16 +200,15 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
-        return typeof window !== 'undefined' && !!(window as any).okxwallet?.tronLink;
+        return typeof window !== 'undefined' && !!window.okxwallet?.tronLink;
       },
       connect: async () => {
-        const okxwallet = (window as any).okxwallet;
-        if (!okxwallet?.tronLink) {
+        if (!window.okxwallet?.tronLink) {
           throw new Error('OKX Wallet is not installed');
         }
 
         try {
-          const accounts = await okxwallet.tronLink.request({ method: 'tron_requestAccounts' });
+          const accounts = await window.okxwallet.tronLink.request({ method: 'tron_requestAccounts' });
           if (!accounts || accounts.length === 0) {
             throw new Error('No accounts available');
           }
@@ -203,17 +232,15 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
-        return typeof window !== 'undefined' && !!(window as any).trustwallet?.tronWeb;
+        return typeof window !== 'undefined' && !!window.trustwallet?.tronWeb;
       },
       connect: async () => {
-        const trustwallet = (window as any).trustwallet;
-        if (!trustwallet?.tronWeb) {
+        if (!window.trustwallet?.tronWeb) {
           throw new Error('Trust Wallet is not installed');
         }
 
         try {
-          // Request account access
-          const accounts = await trustwallet.tronWeb.request({ method: 'tron_requestAccounts' });
+          const accounts = await window.trustwallet.tronWeb.request({ method: 'tron_requestAccounts' });
           if (!accounts || accounts.length === 0) {
             throw new Error('No accounts available');
           }
@@ -237,16 +264,15 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
-        return typeof window !== 'undefined' && !!(window as any).tokenpocket?.tronWeb;
+        return typeof window !== 'undefined' && !!window.tokenpocket?.tronWeb;
       },
       connect: async () => {
-        const tokenpocket = (window as any).tokenpocket;
-        if (!tokenpocket?.tronWeb) {
+        if (!window.tokenpocket?.tronWeb) {
           throw new Error('TokenPocket is not installed');
         }
 
         try {
-          const accounts = await tokenpocket.tronWeb.request({ method: 'tron_requestAccounts' });
+          const accounts = await window.tokenpocket.tronWeb.request({ method: 'tron_requestAccounts' });
           if (!accounts || accounts.length === 0) {
             throw new Error('No accounts available');
           }
@@ -262,33 +288,6 @@ const WalletConnect: React.FC = () => {
       }
     }
   ];
-
-  // Check for wallet availability on mount
-  useEffect(() => {
-    // Check if any wallet is already connected
-    const checkExistingConnection = async () => {
-      for (const wallet of walletConfigs) {
-        if (wallet.checkAvailability()) {
-          try {
-            const result = await wallet.connect();
-            if (result.address) {
-              setSelectedWallet(wallet.name);
-              setAddress(result.address);
-              setIsConnected(true);
-              if (result.network) {
-                setNetwork(result.network);
-              }
-              break;
-            }
-          } catch (e) {
-            // Wallet not connected, continue checking others
-          }
-        }
-      }
-    };
-
-    checkExistingConnection();
-  }, []);
 
   const connectWallet = async (walletConfig: WalletConfig) => {
     setIsConnecting(true);
@@ -312,19 +311,14 @@ const WalletConnect: React.FC = () => {
         }
 
         // Set up event listeners for TronLink
-        if (walletConfig.name === 'TronLink' && (window as any).tronWeb) {
-          const tronWeb = (window as any).tronWeb;
-          
-          // Listen for account changes
-          if (tronWeb.on) {
-            tronWeb.on('addressChanged', (address: string) => {
-              if (address) {
-                setAddress(address);
-              } else {
-                handleDisconnect();
-              }
-            });
-          }
+        if (walletConfig.name === 'TronLink' && window.tronWeb?.on) {
+          window.tronWeb.on('addressChanged', (address: string) => {
+            if (address) {
+              setAddress(address);
+            } else {
+              handleDisconnect();
+            }
+          });
         }
       }
     } catch (err: any) {
@@ -362,7 +356,6 @@ const WalletConnect: React.FC = () => {
       default: return 'text-gray-500';
     }
   };
-
 
   return (
     <div className="max-w-md mx-auto bg-white rounded-xl shadow-lg p-6">
