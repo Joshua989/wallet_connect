@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Wallet, AlertCircle, CheckCircle, Copy, ExternalLink, Smartphone, Monitor, Globe } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Wallet, AlertCircle, CheckCircle, Copy, ExternalLink, Smartphone, Monitor, Globe, Loader2 } from 'lucide-react';
 
 // Enhanced types with proper window extensions
 declare global {
@@ -9,7 +9,7 @@ declare global {
       defaultAddress: { base58: string };
       trx: { getNodeInfo(): Promise<any> };
       on?: (event: string, callback: (address: string) => void) => void;
-      request?: (options: { method: string }) => Promise<void>;
+      request?: (options: { method: string }) => Promise<string[]>;
     };
     bitkeep?: {
       tronLink: {
@@ -57,11 +57,26 @@ interface WalletConfig {
 const WalletConnect: React.FC = () => {
   const [selectedWallet, setSelectedWallet] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [connectingWallet, setConnectingWallet] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [address, setAddress] = useState<string | null>(null);
   const [network, setNetwork] = useState<Network | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showWalletModal, setShowWalletModal] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Detect mobile device
+  useEffect(() => {
+    const checkMobile = () => {
+      const userAgent = navigator.userAgent || navigator.vendor;
+      const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
+      setIsMobile(mobileRegex.test(userAgent.toLowerCase()));
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Helper function to detect network
   const detectNetwork = (chainId: string): Network => {
@@ -98,7 +113,52 @@ const WalletConnect: React.FC = () => {
     };
   };
 
-  // Wallet configurations with proper type checking
+  // Helper function to handle mobile deep links
+  const handleMobileDeepLink = (walletName: string) => {
+    const currentUrl = window.location.href;
+    const encodedUrl = encodeURIComponent(currentUrl);
+    
+    const deepLinks: { [key: string]: string } = {
+      'TronLink': `tronlinkoutside://open.tronlink.org/dapp?dappUrl=${encodedUrl}`,
+      'Bitget Wallet': `bitkeep://dapp?url=${encodedUrl}`,
+      'OKX Wallet': `okex://dapp?url=${encodedUrl}`,
+      'Trust Wallet': `trust://dapp?url=${encodedUrl}`,
+      'TokenPocket': `tokenpocket://dapp?url=${encodedUrl}`
+    };
+
+    const deepLink = deepLinks[walletName];
+    if (deepLink) {
+      window.location.href = deepLink;
+      
+      // Fallback to app store after delay
+      setTimeout(() => {
+        const appStoreLinks: { [key: string]: string } = {
+          'TronLink': 'https://apps.apple.com/app/tronlink/id1453530188',
+          'Bitget Wallet': 'https://apps.apple.com/app/bitget-wallet/id1436799971',
+          'OKX Wallet': 'https://apps.apple.com/app/okx-wallet/id1327268470',
+          'Trust Wallet': 'https://apps.apple.com/app/trust-crypto-bitcoin-wallet/id1288339409',
+          'TokenPocket': 'https://apps.apple.com/app/tokenpocket/id1436028697'
+        };
+        
+        const playStoreLinks: { [key: string]: string } = {
+          'TronLink': 'https://play.google.com/store/apps/details?id=com.tronlinkpro.wallet',
+          'Bitget Wallet': 'https://play.google.com/store/apps/details?id=com.bitget.wallet',
+          'OKX Wallet': 'https://play.google.com/store/apps/details?id=com.okinc.okex.gp',
+          'Trust Wallet': 'https://play.google.com/store/apps/details?id=com.wallet.crypto.trustapp',
+          'TokenPocket': 'https://play.google.com/store/apps/details?id=com.tokenpocket.gp'
+        };
+        
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        const storeLink = isIOS ? appStoreLinks[walletName] : playStoreLinks[walletName];
+        
+        if (storeLink) {
+          window.open(storeLink, '_blank');
+        }
+      }, 2000);
+    }
+  };
+
+  // Enhanced wallet configurations
   const walletConfigs: WalletConfig[] = [
     {
       name: 'TronLink',
@@ -109,30 +169,39 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
+        if (isMobile) {
+          return true; // Always show as available on mobile for deep linking
+        }
         return typeof window !== 'undefined' && !!window.tronWeb;
       },
       connect: async () => {
-        if (!window.tronWeb) {
-          throw new Error('TronLink is not installed');
+        if (isMobile && !window.tronWeb) {
+          handleMobileDeepLink('TronLink');
+          throw new Error('Redirecting to TronLink mobile app...');
         }
 
-        // Check if TronLink is ready
-        if (!window.tronWeb.ready) {
-          // Try to trigger TronLink
-          if (window.tronWeb.request) {
-            try {
-              await window.tronWeb.request({ method: 'tron_requestAccounts' });
-            } catch (error) {
+        if (!window.tronWeb) {
+          throw new Error('TronLink is not installed. Please install the extension.');
+        }
+
+        // Request account access
+        if (window.tronWeb.request) {
+          try {
+            const accounts = await window.tronWeb.request({ method: 'tron_requestAccounts' });
+            if (!accounts || accounts.length === 0) {
+              throw new Error('No accounts available');
+            }
+          } catch (error: any) {
+            if (error.code === 4001) {
               throw new Error('User rejected connection');
             }
-          } else {
-            throw new Error('Please unlock TronLink and refresh the page');
+            throw error;
           }
         }
 
         // Wait for TronLink to be ready
         let attempts = 0;
-        while (!window.tronWeb.ready && attempts < 10) {
+        while (!window.tronWeb.ready && attempts < 20) {
           await new Promise(resolve => setTimeout(resolve, 500));
           attempts++;
         }
@@ -168,9 +237,17 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
+        if (isMobile) {
+          return true; // Always show as available on mobile for deep linking
+        }
         return typeof window !== 'undefined' && !!window.bitkeep?.tronLink;
       },
       connect: async () => {
+        if (isMobile && !window.bitkeep?.tronLink) {
+          handleMobileDeepLink('Bitget Wallet');
+          throw new Error('Redirecting to Bitget Wallet mobile app...');
+        }
+
         if (!window.bitkeep?.tronLink) {
           throw new Error('Bitget Wallet is not installed');
         }
@@ -200,9 +277,17 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
+        if (isMobile) {
+          return true; // Always show as available on mobile for deep linking
+        }
         return typeof window !== 'undefined' && !!window.okxwallet?.tronLink;
       },
       connect: async () => {
+        if (isMobile && !window.okxwallet?.tronLink) {
+          handleMobileDeepLink('OKX Wallet');
+          throw new Error('Redirecting to OKX Wallet mobile app...');
+        }
+
         if (!window.okxwallet?.tronLink) {
           throw new Error('OKX Wallet is not installed');
         }
@@ -232,9 +317,17 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
+        if (isMobile) {
+          return true; // Always show as available on mobile for deep linking
+        }
         return typeof window !== 'undefined' && !!window.trustwallet?.tronWeb;
       },
       connect: async () => {
+        if (isMobile && !window.trustwallet?.tronWeb) {
+          handleMobileDeepLink('Trust Wallet');
+          throw new Error('Redirecting to Trust Wallet mobile app...');
+        }
+
         if (!window.trustwallet?.tronWeb) {
           throw new Error('Trust Wallet is not installed');
         }
@@ -264,9 +357,17 @@ const WalletConnect: React.FC = () => {
       extensionSupported: true,
       mobileSupported: true,
       checkAvailability: () => {
+        if (isMobile) {
+          return true; // Always show as available on mobile for deep linking
+        }
         return typeof window !== 'undefined' && !!window.tokenpocket?.tronWeb;
       },
       connect: async () => {
+        if (isMobile && !window.tokenpocket?.tronWeb) {
+          handleMobileDeepLink('TokenPocket');
+          throw new Error('Redirecting to TokenPocket mobile app...');
+        }
+
         if (!window.tokenpocket?.tronWeb) {
           throw new Error('TokenPocket is not installed');
         }
@@ -291,13 +392,10 @@ const WalletConnect: React.FC = () => {
 
   const connectWallet = async (walletConfig: WalletConfig) => {
     setIsConnecting(true);
+    setConnectingWallet(walletConfig.name);
     setError(null);
 
     try {
-      if (!walletConfig.checkAvailability()) {
-        throw new Error(`${walletConfig.name} is not installed. Please install it first.`);
-      }
-
       const result = await walletConfig.connect();
       
       if (result.address) {
@@ -326,6 +424,7 @@ const WalletConnect: React.FC = () => {
       console.error('Wallet connection error:', err);
     } finally {
       setIsConnecting(false);
+      setConnectingWallet(null);
     }
   };
 
@@ -362,6 +461,9 @@ const WalletConnect: React.FC = () => {
       <div className="text-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">Connect TRON Wallet</h2>
         <p className="text-gray-600">Choose your preferred wallet to connect</p>
+        {isMobile && (
+          <p className="text-sm text-blue-600 mt-2">📱 Mobile device detected</p>
+        )}
       </div>
 
       {error && (
@@ -378,8 +480,17 @@ const WalletConnect: React.FC = () => {
             disabled={isConnecting}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
           >
-            <Wallet className="h-5 w-5" />
-            {isConnecting ? 'Connecting...' : 'Connect Wallet'}
+            {isConnecting ? (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Connecting...
+              </>
+            ) : (
+              <>
+                <Wallet className="h-5 w-5" />
+                Connect Wallet
+              </>
+            )}
           </button>
 
           {showWalletModal && (
@@ -390,6 +501,7 @@ const WalletConnect: React.FC = () => {
                   <button
                     onClick={() => setShowWalletModal(false)}
                     className="text-gray-500 hover:text-gray-700"
+                    disabled={isConnecting}
                   >
                     ✕
                   </button>
@@ -398,31 +510,44 @@ const WalletConnect: React.FC = () => {
                 <div className="space-y-3">
                   {walletConfigs.map((wallet, index) => {
                     const isAvailable = wallet.checkAvailability();
+                    const isCurrentlyConnecting = connectingWallet === wallet.name;
                     
                     return (
                       <div
                         key={index}
                         className={`border rounded-lg p-4 transition-colors ${
-                          isAvailable 
+                          isAvailable && !isConnecting
                             ? 'hover:bg-gray-50 cursor-pointer' 
-                            : 'bg-gray-50 cursor-not-allowed opacity-60'
-                        }`}
-                        onClick={() => isAvailable && connectWallet(wallet)}
+                            : 'cursor-not-allowed opacity-60'
+                        } ${isCurrentlyConnecting ? 'bg-blue-50 border-blue-200' : ''}`}
+                        onClick={() => {
+                          if (isAvailable && !isConnecting) {
+                            connectWallet(wallet);
+                          }
+                        }}
                       >
                         <div className="flex items-center gap-3 mb-2">
                           <span className="text-2xl">{wallet.icon}</span>
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
                               <h4 className="font-semibold text-gray-800">{wallet.name}</h4>
-                              {!isAvailable && (
+                              {isCurrentlyConnecting && (
+                                <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                              )}
+                              {!isAvailable && !isMobile && (
                                 <span className="text-xs bg-red-100 text-red-600 px-2 py-1 rounded">
                                   Not Installed
+                                </span>
+                              )}
+                              {isMobile && (
+                                <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded">
+                                  Mobile
                                 </span>
                               )}
                             </div>
                             <p className="text-sm text-gray-600">{wallet.description}</p>
                           </div>
-                          {!isAvailable && (
+                          {!isAvailable && !isMobile && (
                             <a
                               href={wallet.downloadUrl}
                               target="_blank"
@@ -462,7 +587,10 @@ const WalletConnect: React.FC = () => {
 
                 <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                   <p className="text-sm text-yellow-800">
-                    <strong>Note:</strong> Make sure you have the wallet extension installed and unlocked before connecting.
+                    <strong>Note:</strong> {isMobile 
+                      ? 'On mobile, clicking a wallet will open the app if installed, or redirect to the app store.'
+                      : 'Make sure you have the wallet extension installed and unlocked before connecting.'
+                    }
                   </p>
                 </div>
               </div>
